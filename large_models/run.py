@@ -23,6 +23,7 @@ from metrics import calculate_metric
 from utils import *
 from trainer import OurTrainer
 import random
+# from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 
 @dataclass
 class OurArguments(TrainingArguments):
@@ -102,6 +103,9 @@ class OurArguments(TrainingArguments):
 
     # Auto saving when interrupted
     save_on_interrupt: bool = False # save model when interrupted (useful for long training)
+    logging_strategy: str = "steps" # epoch or steps
+    repetition_penalty: int = 1.1
+    no_repeat_ngram_size: int = 3
 
 
 def parse_args():
@@ -162,6 +166,8 @@ class Framework:
                     self.args.model_name,
                     config=config,
                     device_map='auto',
+                    # offload_state_dict=True,
+                    # offload_folder="./offload",
                     torch_dtype=torch_dtype,
                     max_memory={i: f'{free_in_GB-5}GB' for i in range(torch.cuda.device_count())},
                     load_in_8bit=self.args.load_int8,
@@ -170,7 +176,25 @@ class Framework:
 
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.args.model_name, use_fast=False)
+        
+        if self.args.task_name in ["RTL", "HaVen"]:
+            special_tokens_dict = {
+                "eos_token": "<|endofcode|>",
+                "pad_token": "<|pad|>",
+                "bos_token": "<|startofcode|>"
+            }
+            tokenizer.add_special_tokens(special_tokens_dict)
+            model.resize_token_embeddings(len(tokenizer))
+            tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("<|pad|>")
+            tokenizer.bos_token_id = tokenizer.convert_tokens_to_ids("<|startofcode|>")
 
+        if "codegen" in self.args.model_name:
+            tokenizer.padding_side = "left"
+            # tokenizer.pad_token_id = tokenizer.encode(tokenizer.eos_token)[-1]
+            # tokenizer.bos_token_id = 0
+
+        # tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("<|pad|>")
+        
         # HF tokenizer bug fix
         if "opt" in self.args.model_name:
             tokenizer.bos_token_id = 0
@@ -188,7 +212,7 @@ class Framework:
             LoRA(model, r=self.args.lora_r, alpha=self.args.lora_alpha, float16=self.args.load_float16)
 
         if self.args.head_tuning:
-            if model.config.model_type == "opt":
+            if model.config.model_type == "opt"  or model.config.model_type == "codegen":
                 head_name = "lm_head" if self.args.untie_emb else "embed_tokens"
             else:
                 raise NotImplementedError
@@ -212,13 +236,24 @@ class Framework:
         if generation:
             args = self.args
             # Autoregressive generation
+            # if args.eos_token:
+            #     outputs = self.model.generate(
+            #         input_ids, do_sample=args.sampling, temperature=args.temperature, 
+            #         num_beams=args.num_beams, top_p=args.top_p, top_k=args.top_k, max_new_tokens=min(args.max_new_tokens, args.max_length - input_ids.size(1)), 
+            #         num_return_sequences=1, eos_token_id=[self.tokenizer.encode(args.eos_token, add_special_tokens=False)[-1], self.tokenizer.eos_token_id],
+            #         pad_token_id= self.tokenizer.pad_token_id,
+            #     )
+            # else:
+            #     print("eos_token = \'\'")
             outputs = self.model.generate(
                 input_ids, do_sample=args.sampling, temperature=args.temperature, 
                 num_beams=args.num_beams, top_p=args.top_p, top_k=args.top_k, max_new_tokens=min(args.max_new_tokens, args.max_length - input_ids.size(1)), 
-                num_return_sequences=1, eos_token_id=[self.tokenizer.encode(args.eos_token, add_special_tokens=False)[-1], self.tokenizer.eos_token_id],
+                num_return_sequences=1, eos_token_id = self.tokenizer.eos_token_id,
+                pad_token_id= self.tokenizer.pad_token_id,
             )
+
             # For generation, directly return the text output
-            output_text = self.tokenizer.decode(outputs[0][input_ids.size(1):], skip_special_tokens=True).strip()
+            output_text = self.tokenizer.decode(outputs[0][input_ids.size(1):], skip_special_tokens=False).strip()
             return output_text
         else:
             with torch.inference_mode():
@@ -462,6 +497,21 @@ def result_file_tag(args):
 
 def main():
     args = parse_args()
+
+    # # -------------------- GPU Memory 상태 출력 --------------------
+    # nvmlInit()
+    # h = nvmlDeviceGetHandleByIndex(0)
+    # info = nvmlDeviceGetMemoryInfo(h)
+    # total = int(info.total / (1024 * 1024))
+    # used = int(info.used / (1024 * 1024))
+    # free = int(info.free / (1024 * 1024))
+
+    # print("=" * 60)
+    # print(f"[GPU MEM] Total nvml GPU mem: {total} MB")
+    # print(f"[GPU MEM] Used  nvml GPU mem: {used} MB")
+    # print(f"[GPU MEM] Free  nvml GPU mem: {free} MB")
+    # print("=" * 60)
+    # # -------------------- GPU Memory 상태 출력 --------------------
 
     set_seed(args.seed)
     task = get_task(args.task_name)

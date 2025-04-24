@@ -24,6 +24,60 @@ class Template:
         return candidate
 
 
+class RTLTemplate:
+    def __init__(self):
+        pass
+
+    def encode(self, sample):
+        # Returns the prompt for the model (instruction text)
+        # return sample.data["instruction"].strip()
+        instruction = sample.data["instruction"].strip()
+        # return f"Instruction: {instruction}\nResponse:"
+        return f"You are an expert Verilog engineer.\nInstruction:\n{instruction}\nVerilog Code:\n"
+
+    def verbalize(self, sample, candidate=None):
+        # Returns the correct answer (Verilog code), candidate is ignored
+        # return sample.data["answers"].strip()
+        instruction = sample.data["instruction"].strip()
+        answer = sample.data["answers"].strip()
+        # return f"Instruction: {instruction}\nResponse: {answer}\n"
+        return f"You are an expert Verilog engineer.\nInstruction:\n{instruction}\nVerilog Code:\n{answer}"
+
+    def encode_sfc(self, sample):
+        # Returns the suffix used in self-fewshot response (optional)
+        return NotImplementedError
+
+    def verbalize_sfc(self, sample, candidate=None):
+        # Returns the correct response for SFC mode
+        # return sample.data["answers"].strip()
+        return NotImplementedError
+    
+
+class HaVenTemplate:
+    def __init__(self):
+        pass
+
+    def encode(self, sample):
+        # Returns the prompt for the model (instruction text)
+        instruction = sample.data["instruction"].strip()
+        # You are an expert Verilog engineer.\n
+        return f"Instruction:\n{instruction}\nVerilog code:\n"
+
+    def verbalize(self, sample, candidate=None):
+        # Returns the correct answer (Verilog code), candidate is ignored
+        instruction = sample.data["instruction"].strip()
+        response = sample.data["response"].strip()
+        return f"Instruction:\n{instruction}\nVerilog Code:\n{response}"
+
+    def encode_sfc(self, sample):
+        # Returns the suffix used in self-fewshot response (optional)
+        return NotImplementedError
+
+    def verbalize_sfc(self, sample, candidate=None):
+        # Returns the correct response for SFC mode
+        return NotImplementedError
+
+
 class SST2Template(Template):
     verbalizer = {0: "terrible", 1: "great"}
     def encode(self, sample):

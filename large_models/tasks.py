@@ -104,6 +104,85 @@ class Dataset:
         return self.samples["valid"]
 
 
+class RTLDataset(Dataset):
+    metric_name = "exact_match"
+    # train_sep = "\n\n"
+    generation = True  # Since it is a Verilog generation task
+    
+    def __init__(self, subtask=None, **kwargs) -> None:
+        self.load_dataset(**kwargs)
+    
+    def load_dataset(self, path="./dataset/Resyn27k.json", train_split=0.9, **kwargs):
+        # assert path is not None, "You must provide a path to the Resyn27k.json file"
+
+        # Load the JSON file (assuming line-delimited JSON)
+        with open(path, 'r') as f:
+            data = [json.loads(line) for line in f]
+
+        # Split into train / valid
+        split_idx = int(len(data) * train_split)
+        train_raw = data[:split_idx]
+        valid_raw = data[split_idx:]
+
+        train_samples = [self.build_sample(example, idx) for idx, example in enumerate(train_raw)]
+        valid_samples = [self.build_sample(example, idx+split_idx) for idx, example in enumerate(valid_raw)]
+
+        self.samples = {"train": train_samples, "valid": valid_samples}
+    
+    def build_sample(self, example, idx=0):
+        instruction = example["Instruction"].strip()
+        response = example["Response"][-1].strip()  # assuming one response per item
+        return Sample(
+            id=idx,
+            data={"instruction": instruction, "answers": response},
+            correct_candidate=response,
+            candidates=None  # generation task
+        )
+    
+    def get_template(self, template_version=0):
+        return {0: RTLTemplate}[template_version]()  # Linking template objects defined when needed
+
+
+class HaVenDataset(Dataset):
+    metric_name = "exact_match"
+    generation = True
+
+    def __init__(self, subtask=None, **kwargs) -> None:
+        self.load_dataset()
+        
+    def load_dataset(self):
+        # dataset = load_dataset("yangyiyao/HaVen-KL-Dataset")
+        # train_examples = dataset["train"]
+        # valid_examples = dataset["validation"]
+        dataset = load_dataset("yangyiyao/HaVen-KL-Dataset", split="train")
+
+        # 90% train, 10% valid split
+        n_total = len(dataset)
+        n_valid = int(n_total * 0.1)
+        train_examples = dataset.select(range(n_total - n_valid))
+        valid_examples = dataset.select(range(n_total - n_valid, n_total))
+
+        train_samples = [self.build_sample(example, idx) for idx, example in enumerate(train_examples) if example["output"].strip() != ""]
+        valid_samples = [self.build_sample(example, idx) for idx, example in enumerate(valid_examples) if example["output"].strip() != ""]
+        self.samples = {"train": train_samples, "valid": valid_samples}
+    
+    # for generative tasks, candidates are []
+    def build_sample(self, example, idx):
+        answers = example['output'] + "\n<|endofcode|>"
+        assert len(answers) > 0
+        return Sample(
+            id=idx,
+            data={
+                "instruction": example['instruction'],
+                "response": answers,
+            },
+            candidates=None,
+            correct_candidate=answers
+        )
+        
+    def get_template(self, template_version=0):
+        return {0: HaVenTemplate}[template_version]()
+
 class SST2Dataset(Dataset):
     train_sep = "\n\n"
     def __init__(self, subtask=None, **kwargs) -> None:

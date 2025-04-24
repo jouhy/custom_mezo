@@ -23,12 +23,29 @@ def normalize_answer(s):
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
 
+def normalize_code(s):
+    return s.strip().replace(" ", "").replace("\n", "").lower()
+
+
 def calculate_metric(predictions, metric_name):
     if metric_name == "accuracy":
         if isinstance(predictions[0].correct_candidate, list):
             return np.mean([pred.predicted_candidate in pred.correct_candidate for pred in predictions])
         else:
             return np.mean([pred.correct_candidate == pred.predicted_candidate for pred in predictions])
+    elif metric_name == "exact_match":
+        def is_exact_match(pred):
+            pred_norm = normalize_code(pred.predicted_candidate)
+            if isinstance(pred.correct_candidate, list):
+                return any(pred_norm == normalize_code(gt) for gt in pred.correct_candidate)
+            else:
+                return pred_norm == normalize_code(pred.correct_candidate)
+    
+        return np.mean([is_exact_match(pred) for pred in predictions])
+        # return np.mean([
+        #     normalize_code(pred.predicted_candidate) == normalize_code(pred.correct_candidate)
+        #     for pred in predictions
+        # ])
     elif metric_name == "em":
         # For question answering
         return np.mean([any([normalize_answer(ans) == normalize_answer(pred.predicted_candidate) for ans in pred.correct_candidate]) for pred in predictions])
