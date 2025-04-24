@@ -5,7 +5,23 @@ This part of the code is for MeZO experiments on large autoregressive language m
 
 ## Installation
 
-Please install the latest versions of PyTorch (`pytorch` following [https://pytorch.org](https://pytorch.org)), Transformers (`transformers`), and Accelerate (`accelerate`). This code is tested on `torch==2.1.0.dev20230514+cu118`, `transformers==4.28.1`, and `accelerate==0.17.1` with Python 3.9.7, but should work with older/later versions of these packages too.
+~~Please install the latest versions of PyTorch (`pytorch` following [https://pytorch.org](https://pytorch.org)), Transformers (`transformers`), and Accelerate (`accelerate`). This code is tested on `torch==2.1.0.dev20230514+cu118`, `transformers==4.28.1`, and `accelerate==0.17.1` with Python 3.9.7, but should work with older/later versions of these packages too.~~
+```
+# cuda 11.7
+conda create -n mezo python=3.9
+conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia
+
+# original : pip install transformers==4.28.1 accelerate==0.17.1
+# For more models
+pip install transformers==4.33.0 accelerate==0.20.3
+pip install datasets scikit-learn
+
+# if NumPy version >= 2, Downgrade
+pip install numpy==1.26.4
+
+# code llama
+pip install sentencepiece protobuf
+```
 
 ## Usage
 
@@ -30,6 +46,9 @@ We also support all [HuggingFace trainer arguments](https://github.com/huggingfa
 
 We provide example scripts below for reproducing our experiments. All our examples sample 1,000 training examples, 500 validation examples, and 1,000 testing examples. For ICL, we use 32 demonstrations. For detailed hyperparameters and grid search configs, please refer to Appendix D of [our paper](https://arxiv.org/pdf/2305.17333.pdf).
 ```bash
+# MeZO(full-parameter) with HaVen
+MODEL=Salesforce/codegen-350M-multi TASK=HaVen MODE=ft BS=4 LR=2e-6 EPS=1e-3 bash mezo.sh
+
 # Zero-shot
 MODEL=facebook/opt-13b TASK=SST2 bash icl.sh --num_train 0
 
