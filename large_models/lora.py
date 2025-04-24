@@ -111,10 +111,12 @@ class LoRA:
         self.hidden_dim = model.config.hidden_size
         self.float16 = float16
 
-        if model.config.model_type == "opt":
+        if model.config.model_type == "opt" or model.config.model_type == "codegen":
             attention_name = "attn"
         elif model.config.model_type == "roberta":
             attention_name = "attention"
+        elif model.config.model_type == "llama":
+            attention_name = "self_attn"
         else:
             raise NotImplementedError
 
@@ -124,20 +126,50 @@ class LoRA:
                 logger.info(f"Inject lora to: {key}")
                 _, _, attn = find_module(model, key)
 
-                if model.config.model_type == "opt":
+                if model.config.model_type in ["opt", "llama"]:
+                    use_bias = False
                     original_q_weight = attn.q_proj.weight.data
-                    original_q_bias = attn.q_proj.bias.data
+                    if attn.q_proj.bias is not None:
+                        original_q_bias = attn.q_proj.bias.data
+                        use_bias = True
+                    else:
+                        original_q_bias = None
+
                     original_v_weight= attn.v_proj.weight.data
-                    original_v_bias = attn.v_proj.bias.data
-                    attn.q_proj = LoRALinear(model.config.hidden_size, model.config.hidden_size, r=r, lora_alpha=alpha, bias=model.config.enable_bias).to(original_q_weight.device)
-                    attn.v_proj = LoRALinear(model.config.hidden_size, model.config.hidden_size, r=r, lora_alpha=alpha, bias=model.config.enable_bias).to(original_v_weight.device)
+                    if attn.v_proj.bias is not None:
+                        original_v_bias = attn.v_proj.bias.data
+                        use_bias = True
+                    else:
+                        original_v_bias = None
+                    attn.q_proj = LoRALinear(model.config.hidden_size, model.config.hidden_size, r=r, lora_alpha=alpha, bias=use_bias).to(original_q_weight.device)
+                    attn.v_proj = LoRALinear(model.config.hidden_size, model.config.hidden_size, r=r, lora_alpha=alpha, bias=use_bias).to(original_v_weight.device)
                     if float16:
                         attn.q_proj.half()
                         attn.v_proj.half()
                     attn.q_proj.weight.data = original_q_weight 
-                    attn.q_proj.bias.data = original_q_bias
+                    if use_bias and original_q_bias is not None:
+                        attn.q_proj.bias.data = original_q_bias
                     attn.v_proj.weight.data = original_v_weight
-                    attn.v_proj.bias.data = original_v_bias
+                    if use_bias and original_v_bias is not None:
+                        attn.v_proj.bias.data = original_v_bias
+                elif model.config.model_type in ["codegen"]:
+                    # QKV projection이 합쳐져 있으므로 qkv_proj에 LoRA 적용
+                    original_weight = attn.qkv_proj.weight.data
+                    original_bias = attn.qkv_proj.bias.data if attn.qkv_proj.bias is not None else None
+                    attn.qkv_proj = LoRALinear(
+                            model.config.hidden_size,
+                            3 * model.config.hidden_size,
+                            r=r,
+                            lora_alpha=alpha,
+                            bias=original_bias is not None
+                        ).to(original_weight.device)
+                    
+                    if float16:
+                        attn.qkv_proj.half()
+                    
+                    attn.qkv_proj.weight.data = original_weight
+                    if original_bias is not None:
+                        attn.qkv_proj.bias.data = original_bias
                 else:
                     raise NotImplementedError
         

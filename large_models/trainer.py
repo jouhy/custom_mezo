@@ -41,7 +41,7 @@ from sklearn.linear_model import LinearRegression, LogisticRegression, LogisticR
 
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import (  # isort: split
-    default_hp_search_backend,
+    # default_hp_search_backend,
     get_reporting_integration_callbacks,
     hp_params,
     is_fairscale_available,
@@ -75,7 +75,7 @@ from transformers.modelcard import TrainingSummary
 from transformers.modeling_utils import PreTrainedModel, load_sharded_checkpoint, unwrap_model
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES, MODEL_MAPPING_NAMES
 from transformers.optimization import Adafactor, get_scheduler
-from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, is_torch_greater_or_equal_than_1_10, is_torch_less_than_1_11
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, is_torch_less_than_1_11 #, is_torch_greater_or_equal_than_1_10
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_callback import (
     CallbackHandler,
@@ -122,7 +122,7 @@ from transformers.trainer_utils import (
     TrainerMemoryTracker,
     TrainOutput,
     default_compute_objective,
-    default_hp_space,
+    # default_hp_space,
     denumpify_detensorize,
     enable_full_determinism,
     find_executable_batch_size,
@@ -154,7 +154,7 @@ from transformers.utils import (
 from transformers.utils.generic import ContextManagers
 
 
-_is_native_cpu_amp_available = is_torch_greater_or_equal_than_1_10
+# _is_native_cpu_amp_available = is_torch_greater_or_equal_than_1_10
 
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
@@ -229,7 +229,7 @@ class OurTrainer(Trainer):
         if self.args.linear_probing:
 
             def _get_token_prediction_layer(model):
-                if model.config.model_type == "opt":
+                if model.config.model_type == "opt" or model.config.model_type == "codegen":
                     return model.lm_head
                 else:
                     raise NotImplementedError(model.config.model_type)
@@ -269,7 +269,7 @@ class OurTrainer(Trainer):
             features = torch.cat(features, dim=0).cpu().numpy()
             targets = torch.cat(targets, dim=0).cpu().numpy()
             # Whether to use bias
-            if self.model.config.model_type in ["opt", "gpt2"]:
+            if self.model.config.model_type in ["opt", "gpt2", "codegen"]:
                 use_bias = False
             else:
                 raise NotImplementedError
@@ -365,7 +365,11 @@ class OurTrainer(Trainer):
         elif not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
-        self.state = TrainerState()
+        self.state = TrainerState(
+            logging_steps=self.args.logging_steps,
+            eval_steps=self.args.eval_steps,
+            save_steps=self.args.save_steps,
+        )
         self.state.is_hyper_param_search = trial is not None
 
         # Activate gradient checkpointing if needed
@@ -656,7 +660,7 @@ class OurTrainer(Trainer):
             # Wait for everyone to get here so we are sur the model has been saved by process 0.
             if is_torch_tpu_available():
                 xm.rendezvous("load_best_model_at_end")
-            elif args.local_rank != -1:
+            elif args.local_rank != -1 and torch.distributed.is_available() and torch.distributed.is_initialized():
                 dist.barrier()
             elif is_sagemaker_mp_enabled():
                 smp.barrier()
