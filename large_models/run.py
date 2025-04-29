@@ -23,7 +23,15 @@ from metrics import calculate_metric
 from utils import *
 from trainer import OurTrainer
 import random
-# from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+
+########################### LLMem AREA ###########################
+
+import GPUtil
+from pynvml import *
+import torch.distributed as dist
+from size_estimator import SizeEstimator
+
+########################### LLMem AREA ###########################
 
 @dataclass
 class OurArguments(TrainingArguments):
@@ -107,6 +115,8 @@ class OurArguments(TrainingArguments):
     repetition_penalty: int = 1.1
     no_repeat_ngram_size: int = 3
 
+    #LLMEM config
+    run_llmem: bool = False
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -135,6 +145,7 @@ class Framework:
         """
         Load HuggingFace models
         """
+
         with count_time("Loading model with FP%d" % (16 if self.args.load_float16 else 32)):
             free_in_GB = int(torch.cuda.mem_get_info()[0]/1024**3)
             config = AutoConfig.from_pretrained(self.args.model_name)
@@ -302,7 +313,9 @@ class Framework:
                 logger.info("=== Prompt ===")
                 logger.info(self.tokenizer.decode(encoded_candidates[0]))
                 logger.info(f"Output: {output_text}") 
-            return Prediction(correct_candidate=eval_sample.correct_candidate, predicted_candidate=output_text)
+            return Prediction(correct_candidate=eval_sample.correct_candidate,
+                              predicted_candidate=output_text,
+                              )
         else:
             # For classification/multiple-choice, calculate the probabilities of all candidates
             for candidate_id, encoded_candidate in enumerate(encoded_candidates):
@@ -343,7 +356,9 @@ class Framework:
             else:
                 correct_candidate_id = eval_sample.candidates.index(eval_sample.correct_candidate)
 
-            return Prediction(correct_candidate=correct_candidate_id, predicted_candidate=int(np.argmax(scores)))
+            return Prediction(correct_candidate=correct_candidate_id,
+                              predicted_candidate=int(np.argmax(scores)),
+                              )
 
 
     def evaluate(self, train_samples, eval_samples, one_train_set_per_eval_sample=False):
@@ -461,6 +476,65 @@ class Framework:
             )
         if self.args.resume_from_checkpoint is not None:
             last_checkpoint = self.args.resume_from_checkpoint
+
+        ########################### LLMem AREA ###########################
+        if self.args.run_llmem: 
+            print("Running LLMEM")
+            if not dist.is_initialized():
+                dist.init_process_group(backend='nccl', init_method='env://')
+            world_size = dist.get_world_size()
+
+            nvmlInit()
+            h = nvmlDeviceGetHandleByIndex(0)
+            info = nvmlDeviceGetMemoryInfo(h)
+            total_nvml = int(info.total / (1024 * 1024))
+            used_nvml = int(info.used / (1024 * 1024))
+            print('[0]Total nvml GPU mem: {}'.format(total_nvml))
+            print('[0]Used nvml GPU mem: {}'.format(used_nvml))
+            cuda_context_mem = used_nvml - GPUtil.getGPUs()[dist.get_rank()].memoryUsed
+            framework_initial_mem = GPUtil.getGPUs()[dist.get_rank()].memoryUsed
+            print('[0]Used GPUtil GPU mem: {}'.format(framework_initial_mem)) 
+
+            print(f"[{dist.get_rank()}] cuda_context_mem: {cuda_context_mem} MB")
+            print(f"[{dist.get_rank()}] framework_initial_mem: {framework_initial_mem} MB")
+
+            torch.cuda.empty_cache()
+
+            self.model.to('cuda')
+            # self.model.half()
+            torch.cuda.empty_cache()
+            self.model.gradient_checkpointing_enable()
+
+            def move_to_cuda(batch, device):
+                return {k: v.to(device) for k, v in batch.items()}
+
+            llmem_dataloader = trainer.get_train_dataloader()
+            for batch in llmem_dataloader:
+                test_long_input = move_to_cuda(batch, torch.cuda.current_device())
+                break
+
+            lm_fp32 = False
+            if 'codegen' in self.args.model_name:
+                lm_fp32 = True
+            real_bs = 0
+            real_bs = trainer._train_batch_size
+            se = SizeEstimator(self.model, test_long_input["input_ids"][0:2], real_bs, bytes=2, bytes_input=8,
+                            gpu_n=world_size, tp=0, lm_fp32=lm_fp32, m_total=total_nvml)
+            torch.cuda.empty_cache()
+            prev_get_output = GPUtil.getGPUs()[dist.get_rank()].memoryUsed
+            se.get_output_sizes()
+            torch.cuda.empty_cache()
+            after_get_output = GPUtil.getGPUs()[dist.get_rank()].memoryUsed  
+
+            chunk_mem = GPUtil.getGPUs()[dist.get_rank()].memoryUsed + 400
+            print(chunk_mem, cuda_context_mem, after_get_output, prev_get_output)
+            m_pbase = chunk_mem + cuda_context_mem - (after_get_output - prev_get_output)
+            print('[m_pbase]: {}'.format(m_pbase))
+            esti_mem, real_bs = se.estimate_size(m_init=m_pbase)
+            print('Estimated memory: {0}, real bs: {1}'.format(esti_mem, real_bs))
+            import sys
+            sys.exit()
+        ########################### LLMem AREA ###########################
 
         trainer.train(resume_from_checkpoint=last_checkpoint) 
 
